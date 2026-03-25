@@ -1,0 +1,7 @@
+{
+  "name": "zaiti & habibi",
+  "description": "A professional SaaS platform demonstrating the synergy between Artificial Intelligence and Cloud Computing for small and medium enterprises.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
