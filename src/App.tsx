@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { GoogleGenAI, Modality } from "@google/genai";
 import { 
   LayoutDashboard, 
   Cpu, 
@@ -22,10 +23,17 @@ import {
   BarChart3,
   ArrowUpRight,
   ArrowDownRight,
-  Play
+  Play,
+  Maximize,
+  Minimize,
+  FileText,
+  Download,
+  Square,
+  Send
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from './lib/utils';
+import ShaderBackground from './components/ui/shader-background';
 import { 
   AreaChart, 
   Area, 
@@ -38,6 +46,13 @@ import {
   Bar,
   Cell
 } from 'recharts';
+
+declare global {
+  interface Window {
+    SpeechRecognition: any;
+    webkitSpeechRecognition: any;
+  }
+}
 
 // --- Types ---
 interface NavItem {
@@ -82,8 +97,13 @@ const Sidebar = ({ activeTab, setActiveTab, collapsed, setCollapsed }: any) => {
       className="fixed left-0 top-0 h-full glass border-r border-white/10 z-50 flex flex-col"
     >
       <div className="p-6 flex items-center gap-3">
-        <div className="w-8 h-8 bg-gradient-brand rounded-lg flex items-center justify-center shadow-lg shadow-purple-500/20">
-          <Zap className="w-5 h-5 text-white" />
+        <div className="w-8 h-8 bg-gradient-brand rounded-lg flex items-center justify-center shadow-lg shadow-purple-500/20 overflow-hidden">
+          <img 
+            src="/logo.jpg" 
+            alt="Logo" 
+            className="w-full h-full object-contain mix-blend-screen"
+            referrerPolicy="no-referrer"
+          />
         </div>
         {!collapsed && (
           <span className="font-bold text-xl tracking-tight">
@@ -138,7 +158,7 @@ const Sidebar = ({ activeTab, setActiveTab, collapsed, setCollapsed }: any) => {
   );
 };
 
-const Navbar = ({ collapsed, setCollapsed }: any) => {
+const Navbar = ({ collapsed, setCollapsed, isFullscreen, toggleFullscreen }: any) => {
   return (
     <header className={cn(
       "fixed top-0 right-0 h-16 glass border-b border-white/10 z-40 transition-all duration-300 flex items-center justify-between px-6",
@@ -162,6 +182,17 @@ const Navbar = ({ collapsed, setCollapsed }: any) => {
       </div>
 
       <div className="flex items-center gap-4">
+        <button 
+          onClick={toggleFullscreen}
+          className="p-2 hover:bg-white/5 rounded-lg transition-colors"
+          title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
+        >
+          {isFullscreen ? (
+            <Minimize className="w-5 h-5 text-slate-400" />
+          ) : (
+            <Maximize className="w-5 h-5 text-slate-400" />
+          )}
+        </button>
         <button className="p-2 hover:bg-white/5 rounded-lg relative">
           <Bell className="w-5 h-5 text-slate-400" />
           <span className="absolute top-2 right-2 w-2 h-2 bg-purple-500 rounded-full border-2 border-slate-950"></span>
@@ -210,52 +241,202 @@ const StatCard = ({ title, value, trend, icon: Icon, color }: any) => {
 
 // --- Voice Logic ---
 
-const useProfessionalVoice = () => {
-  const [isSpeaking, setIsSpeaking] = useState(false);
+const extractText = (node: React.ReactNode): string => {
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(extractText).join('');
+  if (React.isValidElement(node) && node.props.children) return extractText(node.props.children);
+  return '';
+};
 
-  const speak = (text: string) => {
+const useProfessionalVoice = (language: string = 'en') => {
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  useEffect(() => {
+    let attempts = 0;
+    const maxAttempts = 10;
+
+    const loadVoices = () => {
+      const availableVoices = window.speechSynthesis.getVoices();
+      if (availableVoices.length > 0) {
+        setVoices(availableVoices);
+        return true;
+      }
+      return false;
+    };
+
+    if (!loadVoices()) {
+      const interval = setInterval(() => {
+        attempts++;
+        if (loadVoices() || attempts >= maxAttempts) {
+          clearInterval(interval);
+        }
+      }, 500);
+      return () => clearInterval(interval);
+    }
+
+    if (window.speechSynthesis.onvoiceschanged !== undefined) {
+      window.speechSynthesis.onvoiceschanged = loadVoices;
+    }
+  }, []);
+
+  const speakWithGemini = async (text: string) => {
+    try {
+      setIsSpeaking(true);
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash-preview-tts",
+        contents: [{ parts: [{ text }] }],
+        config: {
+          responseModalities: [Modality.AUDIO],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: 'Kore' }, // Kore is a deep male voice
+            },
+          },
+        },
+      });
+
+      const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      if (base64Audio) {
+        const binaryString = window.atob(base64Audio);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+
+        const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+        
+        try {
+          // Try standard decoding first (WAV/MP3)
+          const audioBuffer = await audioContext.decodeAudioData(bytes.buffer.slice(0));
+          const source = audioContext.createBufferSource();
+          source.buffer = audioBuffer;
+          source.connect(audioContext.destination);
+          source.onended = () => setIsSpeaking(false);
+          source.start(0);
+        } catch (e) {
+          // If decoding fails, it's likely raw PCM 24kHz mono
+          console.log("Standard decoding failed, attempting raw PCM playback...", e);
+          const pcmData = new Int16Array(bytes.buffer);
+          const audioBuffer = audioContext.createBuffer(1, pcmData.length, 24000);
+          const channelData = audioBuffer.getChannelData(0);
+          for (let i = 0; i < pcmData.length; i++) {
+            channelData[i] = pcmData[i] / 32768.0;
+          }
+          const source = audioContext.createBufferSource();
+          source.buffer = audioBuffer;
+          source.connect(audioContext.destination);
+          source.onended = () => setIsSpeaking(false);
+          source.start(0);
+        }
+      } else {
+        setIsSpeaking(false);
+      }
+    } catch (error) {
+      console.error('Gemini TTS Error:', error);
+      setIsSpeaking(false);
+      // Fallback to browser TTS if Gemini fails
+      speakWithBrowser(text);
+    }
+  };
+
+  const speakWithBrowser = (text: string) => {
     if (!('speechSynthesis' in window)) return;
+    if (!text) return;
 
     window.speechSynthesis.cancel();
     
-    const loadVoicesAndSpeak = () => {
-      const utterance = new SpeechSynthesisUtterance(text);
-      const voices = window.speechSynthesis.getVoices();
-      
-      // Try to find a professional male voice
-      const maleVoice = voices.find(v => 
-        (v.name.includes('Male') || v.name.includes('David') || v.name.includes('Google US English')) && 
-        v.lang.startsWith('en')
-      ) || voices.find(v => v.lang.startsWith('en'));
-      
-      if (maleVoice) {
-        utterance.voice = maleVoice;
-      }
+    const utterance = new SpeechSynthesisUtterance(text);
+    
+    const langMap: Record<string, string> = {
+      'ar': 'ar-SA',
+      'fr': 'fr-FR',
+      'en': 'en-US'
+    };
+    
+    const targetLang = langMap[language] || 'en-US';
+    utterance.lang = targetLang;
 
-      utterance.pitch = 0.9;
-      utterance.rate = 0.9;
-      utterance.volume = 1;
-
-      utterance.onstart = () => setIsSpeaking(true);
-      utterance.onend = () => setIsSpeaking(false);
-      utterance.onerror = () => setIsSpeaking(false);
-
-      window.speechSynthesis.speak(utterance);
+    const currentVoices = voices.length > 0 ? voices : window.speechSynthesis.getVoices();
+    
+    const isMaleVoice = (name: string) => {
+      const maleKeywords = ['male', 'man', 'david', 'mark', 'daniel', 'paul', 'stefan', 'maged', 'naayf', 'guy', 'thomas', 'google uk english male', 'microsoft david', 'premium', 'natural', 'tarik', 'hamdan', 'zayd', 'hassan', 'omar'];
+      return maleKeywords.some(keyword => name.toLowerCase().includes(keyword));
     };
 
-    if (window.speechSynthesis.getVoices().length === 0) {
-      window.speechSynthesis.onvoiceschanged = loadVoicesAndSpeak;
-    } else {
-      loadVoicesAndSpeak();
+    const langVoices = currentVoices.filter(v => {
+      const l = v.lang.toLowerCase();
+      const n = v.name.toLowerCase();
+      return l.startsWith(language.toLowerCase()) || 
+             l.includes(language.toLowerCase()) ||
+             (language === 'ar' && (l.startsWith('ara') || n.includes('arabic')));
+    });
+    
+    const voice = langVoices.find(v => v.name.toLowerCase().includes('google') && isMaleVoice(v.name)) ||
+                  langVoices.find(v => v.name.toLowerCase().includes('google')) ||
+                  langVoices.find(v => v.lang === targetLang && isMaleVoice(v.name)) ||
+                  langVoices.find(v => isMaleVoice(v.name)) ||
+                  langVoices.find(v => v.lang === targetLang) ||
+                  langVoices.find(v => v.lang.startsWith(language)) ||
+                  langVoices[0];
+    
+    if (voice) {
+      utterance.voice = voice;
+      utterance.lang = voice.lang;
     }
+
+    utterance.pitch = language === 'ar' ? 0.8 : 0.7; 
+    utterance.rate = language === 'ar' ? 0.85 : 0.8;
+    utterance.volume = 1;
+
+    utterance.onstart = () => setIsSpeaking(true);
+    utterance.onend = () => setIsSpeaking(false);
+    utterance.onerror = (e) => {
+      console.error('SpeechSynthesis Error:', e);
+      setIsSpeaking(false);
+    };
+
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const speak = (text: string) => {
+    if (!text) return;
+
+    // For Arabic, we want it to be INSTANT.
+    // 1. Try to find a high-quality "Google" voice in the browser (Instant)
+    // 2. If not found, try ANY Arabic voice in the browser (Instant)
+    // 3. Only if NO Arabic voice exists in the browser, use Gemini TTS (High Quality but slower)
+    if (language === 'ar') {
+      const currentVoices = voices.length > 0 ? voices : window.speechSynthesis.getVoices();
+      const arabicVoices = currentVoices.filter(v => 
+        v.lang.startsWith('ar') || v.lang.startsWith('ara') || v.name.toLowerCase().includes('arabic')
+      );
+
+      const googleArabicVoice = arabicVoices.find(v => v.name.toLowerCase().includes('google'));
+
+      if (googleArabicVoice || arabicVoices.length > 0) {
+        console.log(`Using instant browser voice for Arabic (${googleArabicVoice ? 'Google' : 'System'})`);
+        speakWithBrowser(text);
+      } else {
+        console.log("No Arabic voice found in browser at all, using Gemini AI voice...");
+        speakWithGemini(text);
+      }
+      return;
+    }
+
+    // For other languages, use browser TTS
+    speakWithBrowser(text);
   };
 
   return { speak, isSpeaking };
 };
 
-const Speakable = ({ children, text, className, onSpeakChange }: { children: React.ReactNode, text?: string, className?: string, onSpeakChange?: (isSpeaking: boolean) => void }) => {
-  const { speak, isSpeaking } = useProfessionalVoice();
-  const content = text || (typeof children === 'string' ? children : '');
+const Speakable = ({ children, text, className, onSpeakChange, language = 'en' }: { children: React.ReactNode, text?: string, className?: string, onSpeakChange?: (isSpeaking: boolean) => void, language?: string }) => {
+  const { speak, isSpeaking } = useProfessionalVoice(language);
+  const content = text || extractText(children);
 
   useEffect(() => {
     onSpeakChange?.(isSpeaking);
@@ -270,7 +451,7 @@ const Speakable = ({ children, text, className, onSpeakChange }: { children: Rea
         speak(content);
       }}
       className={cn(
-        "cursor-pointer transition-all duration-200 relative inline-block group",
+        "cursor-pointer transition-all duration-200 relative inline group",
         isSpeaking ? "text-purple-400" : "hover:text-purple-300",
         className
       )}
@@ -371,11 +552,579 @@ const VideoExplanation = ({ videoId, title, description, isShort = true }: { vid
   );
 };
 
+const VoiceChat = () => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [isReportMode, setIsReportMode] = useState(false);
+  const [isRecordingReport, setIsRecordingReport] = useState(false);
+  const [reportTimer, setReportTimer] = useState(0);
+  const [messages, setMessages] = useState<{ role: 'user' | 'ai', text: string, isReport?: boolean }[]>([]);
+  const [inputValue, setInputValue] = useState('');
+  const [chatLanguage, setChatLanguage] = useState<'en' | 'fr' | 'ar'>('en');
+  const { speak, isSpeaking } = useProfessionalVoice(chatLanguage);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const recognitionRef = useRef<any>(null);
+  const timerRef = useRef<any>(null);
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [messages]);
+
+  useEffect(() => {
+    if (isRecordingReport) {
+      timerRef.current = setInterval(() => {
+        setReportTimer(prev => prev + 1);
+      }, 1000);
+    } else {
+      clearInterval(timerRef.current);
+      setReportTimer(0);
+    }
+    return () => clearInterval(timerRef.current);
+  }, [isRecordingReport]);
+
+  useEffect(() => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SpeechRecognition) {
+      recognitionRef.current = new SpeechRecognition();
+      recognitionRef.current.continuous = isReportMode;
+      recognitionRef.current.interimResults = false;
+      recognitionRef.current.lang = chatLanguage === 'ar' ? 'ar-SA' : chatLanguage === 'fr' ? 'fr-FR' : 'en-US';
+
+      recognitionRef.current.onresult = (event: any) => {
+        let transcript = '';
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          if (event.results[i].isFinal) {
+            transcript += event.results[i][0].transcript;
+          }
+        }
+        
+        if (isReportMode) {
+          setInputValue(prev => prev + ' ' + transcript);
+        } else {
+          handleSendMessage(transcript);
+          setIsListening(false);
+        }
+      };
+
+      recognitionRef.current.onerror = (event: any) => {
+        console.error('Speech recognition error', event.error);
+        setIsListening(false);
+        setIsRecordingReport(false);
+      };
+
+      recognitionRef.current.onend = () => {
+        if (!isReportMode) setIsListening(false);
+      };
+    }
+  }, [isReportMode, chatLanguage]);
+
+  const toggleListening = () => {
+    if (isListening || isRecordingReport) {
+      recognitionRef.current?.stop();
+      setIsListening(false);
+      setIsRecordingReport(false);
+      if (isReportMode && inputValue.trim()) {
+        handleSendMessage(inputValue, true);
+      }
+    } else {
+      if (isReportMode) {
+        setIsRecordingReport(true);
+        setInputValue('');
+      } else {
+        setIsListening(true);
+      }
+      recognitionRef.current?.start();
+    }
+  };
+
+  const handleSendMessage = async (text: string, isReport = false) => {
+    if (!text.trim()) return;
+
+    const userMessage = { role: 'user' as const, text, isReport };
+    setMessages(prev => [...prev, userMessage]);
+    setInputValue('');
+
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const model = "gemini-3.1-flash-lite-preview";
+      
+      const systemPrompt = isReport 
+        ? `You are an elite SME Consultant. Generate a "Professional Audio Report" based on the user's inquiry about AI, Cloud, or SMEs. 
+           The report should be structured with:
+           1. Executive Summary
+           2. Strategic Analysis
+           3. Recommended Implementation Roadmap
+           
+           CRITICAL: Respond in ${chatLanguage === 'en' ? 'English' : chatLanguage === 'fr' ? 'French' : 'Arabic'}.
+           Keep the tone authoritative and visionary. Do not use markdown formatting. Use clear, spoken-word transitions.`
+        : `You are an elite AI assistant specialized in AI, Cloud Computing, and SME digital transformation. Your expertise is strictly limited to these fields. 
+
+           CRITICAL: You MUST respond in ${chatLanguage === 'en' ? 'English' : chatLanguage === 'fr' ? 'French' : 'Arabic'}. Even if the user speaks a different language, translate your response to ${chatLanguage === 'en' ? 'English' : chatLanguage === 'fr' ? 'French' : 'Arabic'}.
+
+           If a user asks a question outside of AI, Cloud, or SMEs, you must respond with a highly professional, sophisticated, and creative message in ${chatLanguage === 'en' ? 'English' : chatLanguage === 'fr' ? 'French' : 'Arabic'}. Explain that your developer has specialized your intelligence specifically for AI, Cloud, and SME solutions.
+
+           For Arabic responses, use a tone like: 'أنا ذكاء اصطناعي متخصص حصرياً في حلول الذكاء الاصطناعي، الحوسبة السحابية، والتحول الرقمي للمؤسسات. لقد صمم مطوري خبراتي بدقة لتتركز في هذه المجالات لضمان تقديم أعلى مستويات الاحترافية.'
+
+           Keep all responses concise and professional. Do not use markdown formatting as the text will be read aloud.`;
+
+      const response = await ai.models.generateContent({
+        model,
+        contents: [
+          { role: 'user', parts: [{ text }] }
+        ],
+        config: {
+          systemInstruction: systemPrompt,
+        }
+      });
+
+      const aiText = response.text || "I'm sorry, I couldn't process that.";
+      setMessages(prev => [...prev, { role: 'ai', text: aiText, isReport }]);
+      speak(aiText);
+    } catch (error) {
+      console.error('Chat error:', error);
+      const errorMsg = "Sorry, I encountered an error.";
+      setMessages(prev => [...prev, { role: 'ai', text: errorMsg }]);
+      speak(errorMsg);
+    }
+  };
+
+  const downloadReport = (text: string) => {
+    const element = document.createElement("a");
+    const file = new Blob([text], {type: 'text/plain'});
+    element.href = URL.createObjectURL(file);
+    element.download = "Professional_SME_Report.txt";
+    document.body.appendChild(element);
+    element.click();
+  };
+
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  return (
+    <>
+      {/* Floating Button */}
+      <button
+        onClick={() => setIsOpen(true)}
+        className="fixed bottom-6 right-6 w-14 h-14 bg-gradient-to-br from-purple-600 to-blue-600 rounded-full flex items-center justify-center shadow-2xl shadow-purple-500/40 z-[60] hover:scale-110 transition-transform active:scale-95"
+      >
+        <MessageSquare className="w-6 h-6 text-white" />
+      </button>
+
+      {/* Chat Window */}
+      <AnimatePresence>
+        {isOpen && (
+          <motion.div
+            initial={{ opacity: 0, y: 20, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 20, scale: 0.95 }}
+            className="fixed bottom-24 right-6 w-96 h-[500px] glass border border-white/10 rounded-2xl shadow-2xl z-[60] flex flex-col overflow-hidden"
+          >
+            {/* Header */}
+            <div className="p-4 border-b border-white/10 flex items-center justify-between bg-white/5">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 bg-purple-500/20 rounded-full flex items-center justify-center">
+                  <Cpu className="w-4 h-4 text-purple-400" />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-sm text-white">AI Assistant</h3>
+                  <div className="flex gap-1 mt-0.5">
+                    {(['en', 'fr', 'ar'] as const).map((lang) => (
+                      <button
+                        key={lang}
+                        onClick={() => setChatLanguage(lang)}
+                        className={cn(
+                          "text-[8px] px-1 rounded border transition-all uppercase font-bold",
+                          chatLanguage === lang 
+                            ? "bg-purple-500 border-purple-500 text-white" 
+                            : "border-white/20 text-white/40 hover:border-white/40"
+                        )}
+                      >
+                        {lang}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <button onClick={() => setIsOpen(false)} className="p-1 hover:bg-white/10 rounded-lg transition-colors">
+                <X className="w-5 h-5 text-white/60" />
+              </button>
+            </div>
+
+            {/* Messages */}
+            <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-hide">
+              {messages.length === 0 && (
+                <div className="h-full flex flex-col items-center justify-center text-center p-6 space-y-4">
+                  <div className="w-16 h-16 bg-purple-500/10 rounded-full flex items-center justify-center animate-pulse">
+                    <Mic className="w-8 h-8 text-purple-400" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-white">How can I help you today?</p>
+                    <p className="text-xs text-white/40 mt-1">Ask me about AI, Cloud, or SME solutions.</p>
+                    <button 
+                      onClick={() => setIsReportMode(true)}
+                      className="mt-4 px-4 py-2 bg-purple-500/20 border border-purple-500/30 rounded-xl text-purple-400 text-xs font-bold hover:bg-purple-500/30 transition-all"
+                    >
+                      Consult the Expert (Report Mode)
+                    </button>
+                  </div>
+                </div>
+              )}
+              {messages.map((msg, i) => (
+                <div key={i} className={cn("flex flex-col gap-2", msg.role === 'user' ? "items-end" : "items-start")}>
+                  <div className={cn(
+                    "max-w-[85%] p-4 rounded-2xl text-sm shadow-lg backdrop-blur-md",
+                    msg.role === 'user' 
+                      ? "bg-purple-600/80 text-white rounded-tr-none border border-white/10" 
+                      : "bg-white/10 text-white/90 rounded-tl-none border border-white/5"
+                  )}>
+                    {msg.isReport && msg.role === 'ai' && (
+                      <div className="flex items-center gap-2 mb-2 pb-2 border-b border-white/10">
+                        <FileText className="w-4 h-4 text-purple-400" />
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-purple-400">Professional Audio Report</span>
+                      </div>
+                    )}
+                    {msg.text}
+                    {msg.isReport && msg.role === 'ai' && (
+                      <button 
+                        onClick={() => downloadReport(msg.text)}
+                        className="mt-4 w-full flex items-center justify-center gap-2 py-2 bg-white/5 hover:bg-white/10 rounded-lg text-[10px] font-bold transition-all border border-white/10"
+                      >
+                        <Download className="w-3 h-3" /> Download Transcript
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+              {isSpeaking && (
+                <div className="flex justify-start">
+                  <div className="bg-white/5 p-2 rounded-full flex gap-1">
+                    <div className="w-1 h-1 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                    <div className="w-1 h-1 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                    <div className="w-1 h-1 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Input */}
+            <div className="p-4 border-t border-white/10 bg-white/5">
+              {isReportMode ? (
+                <div className="flex flex-col gap-3">
+                  <div className="flex items-center justify-between px-2">
+                    <span className="text-[10px] font-bold text-purple-400 flex items-center gap-2">
+                      <div className={cn("w-2 h-2 rounded-full bg-purple-500", isRecordingReport ? "animate-pulse" : "")} />
+                      {isRecordingReport ? "RECORDING EXPERT INQUIRY..." : "READY TO RECORD"}
+                    </span>
+                    <span className="text-[10px] font-mono text-white/40">{formatTime(reportTimer)}</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={toggleListening}
+                      className={cn(
+                        "flex-1 py-3 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 relative overflow-hidden",
+                        isRecordingReport 
+                          ? "bg-red-500 text-white shadow-lg shadow-red-500/20" 
+                          : "bg-purple-600 text-white shadow-lg shadow-purple-500/20"
+                      )}
+                    >
+                      {isRecordingReport && (
+                        <motion.div 
+                          animate={{ scale: [1, 1.5, 1], opacity: [0.5, 0, 0.5] }}
+                          transition={{ duration: 2, repeat: Infinity }}
+                          className="absolute inset-0 bg-white/20"
+                        />
+                      )}
+                      {isRecordingReport ? <><Square className="w-4 h-4" /> Stop & Generate Report</> : <><Mic className="w-4 h-4" /> Start Recording Inquiry</>}
+                    </button>
+                    <button 
+                      onClick={() => {
+                        setIsReportMode(false);
+                        setIsRecordingReport(false);
+                        recognitionRef.current?.stop();
+                      }}
+                      className="p-3 bg-white/5 hover:bg-white/10 rounded-xl text-white/60 transition-all border border-white/10"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="relative flex items-center gap-2">
+                  <button 
+                    onClick={() => setIsReportMode(true)}
+                    className="p-2 bg-white/5 hover:bg-white/10 rounded-xl text-purple-400 transition-all border border-white/10"
+                    title="Expert Report Mode"
+                  >
+                    <FileText className="w-5 h-5" />
+                  </button>
+                  <div className="relative flex-1">
+                    <input
+                      type="text"
+                      value={inputValue}
+                      onChange={(e) => setInputValue(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleSendMessage(inputValue)}
+                      placeholder="Type your message..."
+                      className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white placeholder:text-white/20 focus:outline-none focus:border-purple-500/50 transition-all"
+                    />
+                    <button
+                      onClick={toggleListening}
+                      className={cn(
+                        "absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-lg transition-all",
+                        isListening ? "bg-red-500 text-white animate-pulse" : "text-white/40 hover:text-white"
+                      )}
+                    >
+                      <Mic className="w-4 h-4" />
+                    </button>
+                  </div>
+                  <button
+                    onClick={() => handleSendMessage(inputValue)}
+                    disabled={!inputValue.trim()}
+                    className="p-2.5 bg-purple-600 text-white rounded-xl shadow-lg shadow-purple-500/20 disabled:opacity-50 disabled:shadow-none transition-all"
+                  >
+                    <Send className="w-5 h-5" />
+                  </button>
+                </div>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </>
+  );
+};
+
 // --- Main App ---
 
 export default function App() {
   const [hasStarted, setHasStarted] = useState(false);
   const [currentSlide, setCurrentSlide] = useState(0);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [language, setLanguage] = useState<'en' | 'fr' | 'ar'>('en');
+
+  const t = {
+    en: {
+      welcome: "Welcome to Our",
+      presentation: "Presentation",
+      start: "Start Presentation",
+      subtitle: "The future of SME intelligence starts here. Experience the synergy of AI and Cloud.",
+      future: "The Future of SMEs",
+      synergy: "AI & Cloud Synergy",
+      empowering: "Empowering Small Businesses with Digital Intelligence",
+      discover: "Discover how the convergence of Artificial Intelligence and Cloud Computing is leveling the playing field for Small and Medium Enterprises globally.",
+      automation: "Smart Automation",
+      automationDesc: "AI-driven workflows that save time and reduce costs.",
+      infrastructure: "Scalable Infrastructure",
+      infrastructureDesc: "Cloud power that grows with your business needs.",
+      security: "Enterprise Security",
+      securityDesc: "Protecting your most valuable digital assets.",
+      click: "Click on any highlighted text for a professional explanation",
+      whatIsAi: "What is AI for SMEs?",
+      aiDesc: "Artificial Intelligence isn't just for tech giants. For SMEs, it's about using software that can learn, reason, and act to solve real business problems.",
+      aiPoints: [
+        "Predictive Analytics for sales forecasting",
+        "Natural Language Processing for customer support",
+        "Computer Vision for quality control",
+        "Machine Learning for personalized marketing"
+      ],
+      whatIsCloud: "What is Cloud Computing?",
+      cloudDesc: "Cloud computing is the on-demand delivery of IT resources over the internet with pay-as-you-go pricing. Instead of buying, owning, and maintaining physical data centers and servers, you can access technology services, such as computing power, storage, and databases.",
+      cloudPoints: [
+        "On-demand self-service",
+        "Broad network access",
+        "Resource pooling",
+        "Rapid elasticity",
+        "Measured service"
+      ],
+      integration: "The Power of Integration",
+      synergyDesc: "Cloud computing provides the \"muscles\" that power the AI \"brain,\" creating a scalable ecosystem where intelligence meets infinite resources.",
+      synergyPoints: [
+        { title: "Flexibility", desc: "Scale up or down instantly." },
+        { title: "Cost-Effective", desc: "Pay only for what you use." },
+        { title: "Accessibility", desc: "Work from anywhere." },
+        { title: "Reliability", desc: "99.9% uptime guaranteed." }
+      ],
+      quote: "\"Intelligence without power is a dream. Power without intelligence is a machine. Together, they are the future of business.\"",
+      benefits: "Key Benefits",
+      benefitsSubtitle: "The SME Advantage",
+      benefitItems: [
+        { label: "Cost Reduction", value: "45%", desc: "Lower operational overhead" },
+        { label: "Efficiency", value: "84%", desc: "Faster processing times" },
+        { label: "Security", value: "99.9%", desc: "Enterprise-grade protection" },
+        { label: "Growth", value: "3.5x", desc: "Accelerated market expansion" }
+      ],
+      performance: "Performance Impact Analysis",
+      performanceGrowth: "Monthly Performance Growth",
+      efficiencyDistribution: "Operational Efficiency Distribution",
+      challenges: "Strategic Challenges",
+      challengesSubtitle: "Overcoming Barriers",
+      challengeItems: [
+        { title: "Data Privacy & Ethics", desc: "Navigating complex global regulations like GDPR while maintaining ethical AI standards." },
+        { title: "Legacy Integration", desc: "Bridging the gap between modern cloud-native solutions and existing on-premise systems." },
+        { title: "The Skill Gap", desc: "Upskilling existing teams to work alongside AI and manage cloud-first infrastructures." }
+      ],
+      visionaries: "Meet the Visionaries",
+      thankYou: "Thank You",
+      ready: "We appreciate your attention. We are ready to answer any questions about the future of digital intelligence.",
+      restart: "Restart Journey"
+    },
+    fr: {
+      welcome: "Bienvenue dans notre",
+      presentation: "Présentation",
+      start: "Commencer la Présentation",
+      subtitle: "L'avenir de l'intelligence des PME commence ici. Découvrez la synergie de l'IA et du Cloud.",
+      future: "L'Avenir des PME",
+      synergy: "Synergie IA & Cloud",
+      empowering: "Autonomiser les Petites Entreprises avec l'Intelligence Numérique",
+      discover: "Découvrez comment la convergence de l'Intelligence Artificielle et du Cloud Computing nivelle le terrain de jeu pour les PME à l'échelle mondiale.",
+      automation: "Automatisation Intelligente",
+      automationDesc: "Flux de travail pilotés par l'IA qui font gagner du temps et réduisent les coûts.",
+      infrastructure: "Infrastructure Évolutive",
+      infrastructureDesc: "La puissance du Cloud qui grandit avec les besoins de votre entreprise.",
+      security: "Sécurité d'Entreprise",
+      securityDesc: "Protéger vos actifs numériques les plus précieux.",
+      click: "Cliquez sur n'importe quel texte en surbrillance pour une explication professionnelle",
+      whatIsAi: "Qu'est-ce que l'IA pour les PME ?",
+      aiDesc: "L'Intelligence Artificielle n'est pas réservée aux géants de la technologie. Pour les PME, il s'agit d'utiliser des logiciels capables d'apprendre, de raisonner et d'agir pour résoudre de réels problèmes commerciaux.",
+      aiPoints: [
+        "Analytique prédictive pour les prévisions de ventes",
+        "Traitement du langage naturel pour le support client",
+        "Vision par ordinateur pour le contrôle qualité",
+        "Apprentissage automatique pour le marketing personnalisé"
+      ],
+      whatIsCloud: "Qu'est-ce que le Cloud Computing ?",
+      cloudDesc: "Le cloud computing est la fourniture à la demande de ressources informatiques via Internet avec une tarification à l'usage. Au lieu d'acheter, de posséder et d'entretenir des centres de données et des serveurs physiques, vous pouvez accéder à des services technologiques.",
+      cloudPoints: [
+        "Libre-service à la demande",
+        "Accès réseau étendu",
+        "Mise en commun des ressources",
+        "Élasticité rapide",
+        "Service mesuré"
+      ],
+      integration: "Le Pouvoir de l'Intégration",
+      synergyDesc: "Le cloud computing fournit les « muscles » qui alimentent le « cerveau » de l'IA, créant un écosystème évolutif où l'intelligence rencontre des ressources infinies.",
+      synergyPoints: [
+        { title: "Flexibilité", desc: "Évoluez instantanément." },
+        { title: "Rentable", desc: "Payez uniquement ce que vous utilisez." },
+        { title: "Accessibilité", desc: "Travaillez de n'importe où." },
+        { title: "Fiabilité", desc: "Disponibilité garantie à 99,9 %." }
+      ],
+      quote: "\"L'intelligence sans puissance est un rêve. La puissance sans intelligence est une machine. Ensemble, elles sont l'avenir des affaires.\"",
+      benefits: "Avantages Clés",
+      benefitsSubtitle: "L'Avantage PME",
+      benefitItems: [
+        { label: "Réduction des Coûts", value: "45%", desc: "Baisse des frais opérationnels" },
+        { label: "Efficacité", value: "84%", desc: "Temps de traitement plus rapides" },
+        { label: "Sécurité", value: "99,9%", desc: "Protection de niveau entreprise" },
+        { label: "Croissance", value: "3,5x", desc: "Expansion accélérée du marché" }
+      ],
+      performance: "Analyse de l'Impact sur la Performance",
+      performanceGrowth: "Croissance Mensuelle de la Performance",
+      efficiencyDistribution: "Distribution de l'Efficacité Opérationnelle",
+      challenges: "Défis Stratégiques",
+      challengesSubtitle: "Surmonter les Barrières",
+      challengeItems: [
+        { title: "Confidentialité et Éthique", desc: "Naviguer dans des réglementations mondiales complexes comme le RGPD tout en maintenant des normes d'IA éthiques." },
+        { title: "Intégration de l'Héritage", desc: "Combler le fossé entre les solutions cloud natives modernes et les systèmes sur site existants." },
+        { title: "Le Manque de Compétences", desc: "Former les équipes existantes pour travailler aux côtés de l'IA et gérer des infrastructures cloud-first." }
+      ],
+      visionaries: "Rencontrez les Visionnaires",
+      thankYou: "Merci",
+      ready: "Nous apprécions votre attention. Nous sommes prêts à répondre à toutes vos questions sur l'avenir de l'intelligence numérique.",
+      restart: "Redémarrer le Voyage"
+    },
+    ar: {
+      welcome: "مرحباً بكم في",
+      presentation: "عرضنا التقديمي",
+      start: "بدء العرض",
+      subtitle: "مستقبل ذكاء الشركات الصغيرة والمتوسطة يبدأ من هنا. اختبر التآزر بين الذكاء الاصطناعي والسحابة.",
+      future: "مستقبل الشركات الصغيرة والمتوسطة",
+      synergy: "تآزر الذكاء الاصطناعي والسحابة",
+      empowering: "تمكين الشركات الصغيرة بالذكاء الرقمي",
+      discover: "اكتشف كيف يساهم تقارب الذكاء الاصطناعي والحوسبة السحابية في تكافؤ الفرص للشركات الصغيرة والمتوسطة عالمياً.",
+      automation: "الأتمتة الذكية",
+      automationDesc: "سير عمل مدفوع بالذكاء الاصطناعي يوفر الوقت ويقلل التكاليف.",
+      infrastructure: "بنية تحتية قابلة للتطوير",
+      infrastructureDesc: "قوة سحابية تنمو مع احتياجات عملك.",
+      security: "أمن المؤسسات",
+      securityDesc: "حماية أصولك الرقمية الأكثر قيمة.",
+      click: "انقر على أي نص مميز للحصول على شرح احترافي",
+      whatIsAi: "ما هو الذكاء الاصطناعي للشركات الصغيرة والمتوسطة؟",
+      aiDesc: "الذكاء الاصطناعي ليس فقط لعمالقة التكنولوجيا. بالنسبة للشركات الصغيرة والمتوسطة، يتعلق الأمر باستخدام برامج يمكنها التعلم والتفكير والتصرف لحل مشكلات العمل الحقيقية.",
+      aiPoints: [
+        "التحليلات التنبؤية لتوقعات المبيعات",
+        "معالجة اللغات الطبيعية لدعم العملاء",
+        "رؤية الكمبيوتر لمراقبة الجودة",
+        "تعلم الآلة للتسويق الشخصي"
+      ],
+      whatIsCloud: "ما هي الحوسبة السحابية؟",
+      cloudDesc: "الحوسبة السحابية هي توفير موارد تكنولوجيا المعلومات حسب الطلب عبر الإنترنت مع تسعير الدفع حسب الاستخدام. بدلاً من شراء وامتلاك وصيانة مراكز البيانات والخوادم المادية، يمكنك الوصول إلى الخدمات التكنولوجية.",
+      cloudPoints: [
+        "الخدمة الذاتية عند الطلب",
+        "وصول واسع للشبكة",
+        "تجميع الموارد",
+        "المرونة السريعة",
+        "خدمة مقاسة"
+      ],
+      integration: "قوة التكامل",
+      synergyDesc: "توفر الحوسبة السحابية \"العضلات\" التي تغذي \"دماغ\" الذكاء الاصطناعي، مما يخلق نظاماً بيئياً قابلاً للتطوير حيث يلتقي الذكاء بموارد غير محدودة.",
+      synergyPoints: [
+        { title: "المرونة", desc: "التوسع الفوري حسب الحاجة." },
+        { title: "فعالية التكلفة", desc: "ادفع فقط مقابل ما تستخدمه." },
+        { title: "سهولة الوصول", desc: "العمل من أي مكان." },
+        { title: "الموثوقية", desc: "ضمان وقت التشغيل بنسبة 99.9%." }
+      ],
+      quote: "\"الذكاء بدون قوة هو حلم. والقوة بدون ذكاء هي آلة. ومعاً، هما مستقبل الأعمال.\"",
+      benefits: "الفوائد الرئيسية",
+      benefitsSubtitle: "ميزة الشركات الصغيرة والمتوسطة",
+      benefitItems: [
+        { label: "تقليل التكاليف", value: "45%", desc: "خفض التكاليف التشغيلية" },
+        { label: "الكفاءة", value: "84%", desc: "أوقات معالجة أسرع" },
+        { label: "الأمن", value: "99.9%", desc: "حماية على مستوى المؤسسات" },
+        { label: "النمو", value: "3.5x", desc: "تسريع التوسع في السوق" }
+      ],
+      performance: "تحليل تأثير الأداء",
+      performanceGrowth: "نمو الأداء الشهري",
+      efficiencyDistribution: "توزيع الكفاءة التشغيلية",
+      challenges: "التحديات الاستراتيجية",
+      challengesSubtitle: "التغلب على الحواجز",
+      challengeItems: [
+        { title: "خصوصية البيانات والأخلاقيات", desc: "التعامل مع اللوائح العالمية المعقدة مثل GDPR مع الحفاظ على معايير الذكاء الاصطناعي الأخلاقية." },
+        { title: "تكامل الأنظمة القديمة", desc: "سد الفجوة بين الحلول السحابية الحديثة والأنظمة الحالية." },
+        { title: "فجوة المهارات", desc: "رفع مهارات الفرق الحالية للعمل جنباً إلى جنب مع الذكاء الاصطناعي وإدارة البنى التحتية السحابية." }
+      ],
+      visionaries: "تعرف على المبتكرين",
+      thankYou: "شكراً لكم",
+      ready: "نحن نقدر اهتمامكم. نحن مستعدون للإجابة على أي أسئلة حول مستقبل الذكاء الرقمي.",
+      restart: "إعادة الرحلة"
+    }
+  };
+
+  const toggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch((err) => {
+        console.error(`Error attempting to enable full-screen mode: ${err.message} (${err.name})`);
+      });
+      setIsFullscreen(true);
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen();
+        setIsFullscreen(false);
+      }
+    }
+  };
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, []);
 
   const [isBrainSpeaking, setIsBrainSpeaking] = useState(false);
   const [isMuscleSpeaking, setIsMuscleSpeaking] = useState(false);
@@ -383,30 +1132,30 @@ export default function App() {
   const slides = [
     {
       id: 'intro',
-      title: "The Future of SMEs",
-      subtitle: "AI & Cloud Synergy",
+      title: t[language].future,
+      subtitle: t[language].synergy,
       content: (
         <div className="space-y-8 text-center max-w-4xl mx-auto">
           <div className="w-24 h-24 bg-gradient-brand rounded-[2rem] flex items-center justify-center mx-auto mb-8 shadow-2xl shadow-purple-500/40">
             <Zap className="w-12 h-12 text-white" />
           </div>
-          <h2 className="text-6xl font-bold tracking-tight text-gradient leading-tight">
-            <Speakable>Empowering Small Businesses with Digital Intelligence</Speakable>
+          <h2 className="text-6xl font-bold tracking-tight leading-tight">
+            <Speakable language={language} className="text-gradient">{t[language].empowering}</Speakable>
           </h2>
           <p className="text-xl text-slate-400 leading-relaxed">
-            <Speakable>
-              Discover how the convergence of Artificial Intelligence and Cloud Computing is leveling the playing field for Small and Medium Enterprises globally.
+            <Speakable language={language}>
+              {t[language].discover}
             </Speakable>
           </p>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-12">
             {[
-              { label: "Smart Automation", icon: Cpu, desc: "AI-driven workflows that save time and reduce costs." },
-              { label: "Scalable Infrastructure", icon: Cloud, desc: "Cloud power that grows with your business needs." },
-              { label: "Enterprise Security", icon: ShieldCheck, desc: "Protecting your most valuable digital assets." },
+              { label: t[language].automation, icon: Cpu, desc: t[language].automationDesc },
+              { label: t[language].infrastructure, icon: Cloud, desc: t[language].infrastructureDesc },
+              { label: t[language].security, icon: ShieldCheck, desc: t[language].securityDesc },
             ].map((item, i) => (
               <div key={i} className="glass-card p-6 rounded-3xl">
                 <item.icon className="w-8 h-8 text-purple-400 mx-auto mb-4" />
-                <Speakable text={`${item.label}: ${item.desc}`}>
+                <Speakable language={language} text={`${item.label}: ${item.desc}`}>
                   <h4 className="font-bold mb-2">{item.label}</h4>
                   <p className="text-xs text-slate-400">{item.desc}</p>
                 </Speakable>
@@ -421,36 +1170,31 @@ export default function App() {
             className="inline-flex items-center gap-2 glass px-4 py-2 rounded-full text-xs text-slate-400 mx-auto mt-12"
           >
             <Mic className="w-3 h-3 text-purple-400" />
-            Click on any highlighted text for a professional explanation
+            {t[language].click}
           </motion.div>
         </div>
       )
     },
     {
       id: 'ai',
-      title: "Artificial Intelligence",
-      subtitle: "The Digital Brain",
+      title: language === 'ar' ? "الذكاء الاصطناعي" : language === 'fr' ? "Intelligence Artificielle" : "Artificial Intelligence",
+      subtitle: language === 'ar' ? "الدماغ الرقمي" : language === 'fr' ? "Le Cerveau Numérique" : "The Digital Brain",
       content: (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center max-w-6xl mx-auto">
           <div className="space-y-6">
-            <h2 className="text-5xl font-bold tracking-tight text-purple-400">
-              <Speakable>What is AI for SMEs?</Speakable>
+            <h2 className="text-5xl font-bold tracking-tight">
+              <Speakable language={language} className="text-gradient">{t[language].whatIsAi}</Speakable>
             </h2>
             <p className="text-lg text-slate-300 leading-relaxed">
-              <Speakable>
-                Artificial Intelligence isn't just for tech giants. For SMEs, it's about using software that can learn, reason, and act to solve real business problems.
+              <Speakable language={language}>
+                {t[language].aiDesc}
               </Speakable>
             </p>
             <ul className="space-y-4">
-              {[
-                "Predictive Analytics for sales forecasting",
-                "Natural Language Processing for customer support",
-                "Computer Vision for quality control",
-                "Machine Learning for personalized marketing"
-              ].map((item, i) => (
+              {t[language].aiPoints.map((item, i) => (
                 <li key={i} className="flex items-center gap-3 text-slate-400">
                   <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
-                  <Speakable>{item}</Speakable>
+                  <Speakable language={language}>{item}</Speakable>
                 </li>
               ))}
             </ul>
@@ -467,8 +1211,8 @@ export default function App() {
             </div>
             <VideoExplanation 
               videoId="kV7RuutRx-s"
-              title="What is AI?"
-              description="A quick dive into the world of Artificial Intelligence and how it works."
+              title={language === 'ar' ? "ما هو الذكاء الاصطناعي؟" : language === 'fr' ? "Qu'est-ce que l'IA ?" : "What is AI?"}
+              description={language === 'ar' ? "نظرة سريعة على عالم الذكاء الاصطناعي وكيفية عمله." : language === 'fr' ? "Une plongée rapide dans le monde de l'IA." : "A quick dive into the world of Artificial Intelligence and how it works."}
               isShort={false}
             />
           </div>
@@ -477,30 +1221,24 @@ export default function App() {
     },
     {
       id: 'cloud',
-      title: "Cloud Computing",
-      subtitle: "The Digital Muscle",
+      title: language === 'ar' ? "الحوسبة السحابية" : language === 'fr' ? "Cloud Computing" : "Cloud Computing",
+      subtitle: language === 'ar' ? "العضلات الرقمية" : language === 'fr' ? "Le Muscle Numérique" : "The Digital Muscle",
       content: (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center max-w-6xl mx-auto">
           <div className="space-y-6">
-            <h2 className="text-5xl font-bold tracking-tight text-blue-400">
-              <Speakable>What is Cloud Computing?</Speakable>
+            <h2 className="text-5xl font-bold tracking-tight">
+              <Speakable language={language} className="text-gradient">{t[language].whatIsCloud}</Speakable>
             </h2>
             <p className="text-lg text-slate-300 leading-relaxed">
-              <Speakable>
-                Cloud computing is the on-demand delivery of IT resources over the internet with pay-as-you-go pricing. Instead of buying, owning, and maintaining physical data centers and servers, you can access technology services, such as computing power, storage, and databases.
+              <Speakable language={language}>
+                {t[language].cloudDesc}
               </Speakable>
             </p>
             <ul className="space-y-4">
-              {[
-                "On-demand self-service",
-                "Broad network access",
-                "Resource pooling",
-                "Rapid elasticity",
-                "Measured service"
-              ].map((item, i) => (
+              {t[language].cloudPoints.map((item, i) => (
                 <li key={i} className="flex items-center gap-3 text-slate-400">
                   <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-                  <Speakable>{item}</Speakable>
+                  <Speakable language={language}>{item}</Speakable>
                 </li>
               ))}
             </ul>
@@ -517,8 +1255,8 @@ export default function App() {
             </div>
             <VideoExplanation 
               videoId="l1_6gGAPN10"
-              title="AI & Cloud Synergy"
-              description="A professional overview of how these technologies converge."
+              title={language === 'ar' ? "تآزر الذكاء الاصطناعي والسحابة" : language === 'fr' ? "Synergie IA & Cloud" : "AI & Cloud Synergy"}
+              description={language === 'ar' ? "نظرة عامة احترافية على كيفية تقارب هذه التقنيات." : language === 'fr' ? "Un aperçu professionnel de la convergence de ces technologies." : "A professional overview of how these technologies converge."}
               isShort={false}
             />
           </div>
@@ -527,16 +1265,16 @@ export default function App() {
     },
     {
       id: 'synergy',
-      title: "Cloud & AI Synergy",
-      subtitle: "The Scalable Intelligence",
+      title: t[language].synergy,
+      subtitle: language === 'ar' ? "الذكاء القابل للتطوير" : language === 'fr' ? "L'Intelligence Évolutive" : "The Scalable Intelligence",
       content: (
         <div className="space-y-12 max-w-6xl mx-auto">
           <div className="text-center space-y-4">
-            <h2 className="text-5xl font-bold tracking-tight text-gradient">
-              <Speakable>The Power of Integration</Speakable>
+            <h2 className="text-5xl font-bold tracking-tight">
+              <Speakable language={language} className="text-gradient">{t[language].integration}</Speakable>
             </h2>
             <p className="text-lg text-slate-400 max-w-2xl mx-auto">
-              <Speakable>Cloud computing provides the "muscles" that power the AI "brain," creating a scalable ecosystem where intelligence meets infinite resources.</Speakable>
+              <Speakable language={language}>{t[language].synergyDesc}</Speakable>
             </p>
           </div>
 
@@ -557,7 +1295,7 @@ export default function App() {
                       className="glass-card p-6 rounded-2xl border-purple-500/30 text-center w-48"
                     >
                       <Cpu className="w-10 h-10 text-purple-400 mx-auto mb-2" />
-                      <p className="text-xs font-bold">AI Brain</p>
+                      <p className="text-xs font-bold">{language === 'ar' ? "دماغ الذكاء الاصطناعي" : language === 'fr' ? "Cerveau IA" : "AI Brain"}</p>
                     </motion.div>
                  </div>
 
@@ -565,9 +1303,14 @@ export default function App() {
                     <motion.div
                       animate={{ scale: [1, 1.2, 1], boxShadow: ["0 0 0px rgba(250,204,21,0)", "0 0 30px rgba(250,204,21,0.4)", "0 0 0px rgba(250,204,21,0)"] }}
                       transition={{ duration: 2, repeat: Infinity }}
-                      className="w-16 h-16 bg-yellow-400/20 rounded-full flex items-center justify-center border border-yellow-500/50 relative z-20"
+                      className="w-16 h-16 bg-yellow-400/20 rounded-full flex items-center justify-center border border-yellow-500/50 relative z-20 overflow-hidden"
                     >
-                      <Zap className="w-8 h-8 text-yellow-400" />
+                      <img 
+                        src="/logo.jpg" 
+                        alt="Logo" 
+                        className="w-10 h-10 object-contain mix-blend-screen"
+                        referrerPolicy="no-referrer"
+                      />
                     </motion.div>
                     {/* Connection lines */}
                     <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[2px] h-48 bg-gradient-to-b from-purple-500/50 via-yellow-400 to-blue-500/50 -z-10" />
@@ -580,7 +1323,7 @@ export default function App() {
                       className="glass-card p-6 rounded-2xl border-blue-500/30 text-center w-48"
                     >
                       <Cloud className="w-10 h-10 text-blue-400 mx-auto mb-2" />
-                      <p className="text-xs font-bold">Cloud Muscle</p>
+                      <p className="text-xs font-bold">{language === 'ar' ? "عضلات السحابة" : language === 'fr' ? "Muscles Cloud" : "Cloud Muscle"}</p>
                     </motion.div>
                  </div>
               </div>
@@ -588,31 +1331,30 @@ export default function App() {
 
             <div className="space-y-8">
               <div className="grid grid-cols-2 gap-4">
-                {[
-                  { title: "Flexibility", desc: "Scale up or down instantly.", icon: Zap },
-                  { title: "Cost-Effective", desc: "Pay only for what you use.", icon: TrendingUp },
-                  { title: "Accessibility", desc: "Work from anywhere.", icon: Users },
-                  { title: "Reliability", desc: "99.9% uptime guaranteed.", icon: ShieldCheck }
-                ].map((item, i) => (
-                  <motion.div 
-                    key={i}
-                    whileHover={{ scale: 1.05, backgroundColor: "rgba(255,255,255,0.05)" }}
-                    className="p-4 bg-white/5 rounded-2xl border border-white/5 transition-colors"
-                  >
-                    <item.icon className="w-5 h-5 text-blue-400 mb-2" />
-                    <Speakable text={`${item.title}: ${item.desc}`}>
-                      <h4 className="font-bold text-sm text-blue-400">{item.title}</h4>
-                      <p className="text-[10px] text-slate-400 leading-tight">{item.desc}</p>
-                    </Speakable>
-                  </motion.div>
-                ))}
+                {t[language].synergyPoints.map((item, i) => {
+                  const icons = [Zap, TrendingUp, Users, ShieldCheck];
+                  const Icon = icons[i];
+                  return (
+                    <motion.div 
+                      key={i}
+                      whileHover={{ scale: 1.05, backgroundColor: "rgba(255,255,255,0.05)" }}
+                      className="p-4 bg-white/5 rounded-2xl border border-white/5 transition-colors"
+                    >
+                      <Icon className="w-5 h-5 text-blue-400 mb-2" />
+                      <Speakable language={language} text={`${item.title}: ${item.desc}`}>
+                        <h4 className="font-bold text-sm text-blue-400">{item.title}</h4>
+                        <p className="text-[10px] text-slate-400 leading-tight">{item.desc}</p>
+                      </Speakable>
+                    </motion.div>
+                  );
+                })}
               </div>
 
               <div className="glass-card p-6 rounded-3xl border-purple-500/20">
                 <VideoExplanation 
                   videoId="y1jBWGcjTcM"
-                  title="The Power of AI & Cloud"
-                  description="A comprehensive look at how these technologies transform SMEs."
+                  title={language === 'ar' ? "قوة الذكاء الاصطناعي والسحابة" : language === 'fr' ? "La Puissance de l'IA et du Cloud" : "The Power of AI & Cloud"}
+                  description={language === 'ar' ? "نظرة شاملة على كيفية تحويل هذه التقنيات للشركات الصغيرة والمتوسطة." : language === 'fr' ? "Un regard complet sur la transformation des PME par ces technologies." : "A comprehensive look at how these technologies transform SMEs."}
                   isShort={false}
                 />
               </div>
@@ -620,60 +1362,120 @@ export default function App() {
           </div>
 
           <p className="text-lg text-slate-300 max-w-2xl mx-auto font-light italic text-center border-t border-white/5 pt-8">
-            <Speakable>"Intelligence without power is a dream. Power without intelligence is a machine. Together, they are the future of business."</Speakable>
+            <Speakable language={language}>{t[language].quote}</Speakable>
           </p>
         </div>
       )
     },
     {
       id: 'benefits',
-      title: "Key Benefits",
-      subtitle: "The SME Advantage",
+      title: t[language].benefits,
+      subtitle: t[language].benefitsSubtitle,
       content: (
         <div className="space-y-12 max-w-6xl mx-auto">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-            {[
-              { label: "Cost Reduction", value: "45%", desc: "Lower operational overhead", icon: TrendingUp, color: "text-purple-400" },
-              { label: "Efficiency", value: "84%", desc: "Faster processing times", icon: Activity, color: "text-blue-400" },
-              { label: "Security", value: "99.9%", desc: "Enterprise-grade protection", icon: ShieldCheck, color: "text-emerald-400" },
-              { label: "Growth", value: "3.5x", desc: "Accelerated market expansion", icon: Zap, color: "text-yellow-400" },
-            ].map((item, i) => (
-              <motion.div 
-                key={i}
-                initial={{ opacity: 0, scale: 0.9 }}
-                whileInView={{ opacity: 1, scale: 1 }}
-                transition={{ delay: i * 0.1 }}
-                className="glass-card p-8 rounded-3xl text-center"
-              >
-                <item.icon className={cn("w-10 h-10 mx-auto mb-4", item.color)} />
-                <h3 className="text-4xl font-bold mb-2">{item.value}</h3>
-                <Speakable text={`${item.label} is improved by ${item.value}, leading to ${item.desc}.`}>
-                  <p className="font-bold text-sm mb-1">{item.label}</p>
-                  <p className="text-xs text-slate-400">{item.desc}</p>
-                </Speakable>
-              </motion.div>
-            ))}
+            {t[language].benefitItems.map((item, i) => {
+              const icons = [TrendingUp, Activity, ShieldCheck, Zap];
+              const colors = ["text-purple-400", "text-blue-400", "text-emerald-400", "text-yellow-400"];
+              const Icon = icons[i];
+              return (
+                <motion.div 
+                  key={i}
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  whileInView={{ opacity: 1, scale: 1 }}
+                  transition={{ delay: i * 0.1 }}
+                  className="glass-card p-8 rounded-3xl text-center"
+                >
+                  <Icon className={cn("w-10 h-10 mx-auto mb-4", colors[i])} />
+                  <h3 className="text-4xl font-bold mb-2">{item.value}</h3>
+                  <Speakable language={language} text={`${item.label} is improved by ${item.value}, leading to ${item.desc}.`}>
+                    <p className="font-bold text-sm mb-1">{item.label}</p>
+                    <p className="text-xs text-slate-400">{item.desc}</p>
+                  </Speakable>
+                </motion.div>
+              );
+            })}
           </div>
-          <div className="glass-card p-8 rounded-[3rem]">
-            <h3 className="text-2xl font-bold mb-6 text-center">
-              <Speakable>Performance Impact Analysis</Speakable>
+          <div className="glass-card p-8 rounded-[3rem] border-white/5">
+            <h3 className="text-3xl font-bold mb-10 text-center text-gradient">
+              <Speakable language={language}>{t[language].performance}</Speakable>
             </h3>
-            <div className="h-[250px] w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={chartData}>
-                  <defs>
-                    <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.3}/>
-                      <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0}/>
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
-                  <XAxis dataKey="name" stroke="#64748b" fontSize={12} />
-                  <YAxis stroke="#64748b" fontSize={12} />
-                  <Tooltip contentStyle={{ backgroundColor: '#0f172a', border: 'none', borderRadius: '12px' }} />
-                  <Area type="monotone" dataKey="value" stroke="#8b5cf6" strokeWidth={3} fill="url(#colorValue)" />
-                </AreaChart>
-              </ResponsiveContainer>
+            
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
+              <div className="space-y-6">
+                <h4 className="text-lg font-semibold text-purple-400 flex items-center gap-2">
+                  <Activity className="w-5 h-5" />
+                  <Speakable language={language}>{t[language].performanceGrowth}</Speakable>
+                </h4>
+                <div className="h-[300px] w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={chartData}>
+                      <defs>
+                        <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.3}/>
+                          <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0}/>
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+                      <XAxis dataKey="name" stroke="#64748b" fontSize={12} tickLine={false} axisLine={false} />
+                      <YAxis stroke="#64748b" fontSize={12} tickLine={false} axisLine={false} />
+                      <Tooltip 
+                        contentStyle={{ 
+                          backgroundColor: 'rgba(15, 23, 42, 0.9)', 
+                          border: '1px solid rgba(255,255,255,0.1)', 
+                          borderRadius: '16px', 
+                          boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.2)',
+                          backdropFilter: 'blur(8px)'
+                        }}
+                        itemStyle={{ color: '#a78bfa', fontWeight: '600' }}
+                        labelStyle={{ color: '#94a3b8', marginBottom: '4px', fontWeight: 'bold' }}
+                        cursor={{ stroke: '#8b5cf6', strokeWidth: 2 }}
+                      />
+                      <Area 
+                        type="monotone" 
+                        dataKey="value" 
+                        stroke="#8b5cf6" 
+                        strokeWidth={4} 
+                        fill="url(#colorValue)" 
+                        animationDuration={2000}
+                      />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+
+              <div className="space-y-6">
+                <h4 className="text-lg font-semibold text-blue-400 flex items-center gap-2">
+                  <BarChart3 className="w-5 h-5" />
+                  <Speakable language={language}>{t[language].efficiencyDistribution}</Speakable>
+                </h4>
+                <div className="h-[300px] w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={barData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+                      <XAxis dataKey="name" stroke="#64748b" fontSize={12} tickLine={false} axisLine={false} />
+                      <YAxis stroke="#64748b" fontSize={12} tickLine={false} axisLine={false} />
+                      <Tooltip 
+                        contentStyle={{ 
+                          backgroundColor: 'rgba(15, 23, 42, 0.9)', 
+                          border: '1px solid rgba(255,255,255,0.1)', 
+                          borderRadius: '16px', 
+                          boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.2)',
+                          backdropFilter: 'blur(8px)'
+                        }}
+                        itemStyle={{ color: '#60a5fa', fontWeight: '600' }}
+                        labelStyle={{ color: '#94a3b8', marginBottom: '4px', fontWeight: 'bold' }}
+                        cursor={{ fill: 'rgba(255,255,255,0.05)' }}
+                      />
+                      <Bar dataKey="value" radius={[10, 10, 0, 0]} animationDuration={2000}>
+                        {barData.map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={index % 2 === 0 ? '#60a5fa' : '#3b82f6'} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -681,52 +1483,38 @@ export default function App() {
     },
     {
       id: 'challenges',
-      title: "Strategic Challenges",
-      subtitle: "Overcoming Barriers",
+      title: t[language].challenges,
+      subtitle: t[language].challengesSubtitle,
       content: (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 max-w-6xl mx-auto">
-          {[
-            { 
-              title: "Data Privacy & Ethics", 
-              desc: "Navigating complex global regulations like GDPR while maintaining ethical AI standards.",
-              icon: ShieldCheck,
-              color: "text-rose-400"
-            },
-            { 
-              title: "Legacy Integration", 
-              desc: "Bridging the gap between modern cloud-native solutions and existing on-premise systems.",
-              icon: Settings,
-              color: "text-amber-400"
-            },
-            { 
-              title: "The Skill Gap", 
-              desc: "Upskilling existing teams to work alongside AI and manage cloud-first infrastructures.",
-              icon: Users,
-              color: "text-blue-400"
-            }
-          ].map((challenge, i) => (
-            <motion.div 
-              key={i}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.1 }}
-              className="glass-card p-10 rounded-[2.5rem] border-white/5 hover:border-white/10 transition-all"
-            >
-              <div className={cn("w-14 h-14 bg-white/5 rounded-2xl flex items-center justify-center mb-8", challenge.color.replace('text', 'bg-opacity-10 bg'))}>
-                <challenge.icon className={cn("w-8 h-8", challenge.color)} />
-              </div>
-              <Speakable text={`${challenge.title}: ${challenge.desc}`}>
-                <h3 className="text-2xl font-bold mb-4">{challenge.title}</h3>
-                <p className="text-slate-400 leading-relaxed">{challenge.desc}</p>
-              </Speakable>
-            </motion.div>
-          ))}
+          {t[language].challengeItems.map((challenge, i) => {
+            const icons = [ShieldCheck, Settings, Users];
+            const colors = ["text-rose-400", "text-amber-400", "text-blue-400"];
+            const Icon = icons[i];
+            return (
+              <motion.div 
+                key={i}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: i * 0.1 }}
+                className="glass-card p-10 rounded-[2.5rem] border-white/5 hover:border-white/10 transition-all"
+              >
+                <div className={cn("w-14 h-14 bg-white/5 rounded-2xl flex items-center justify-center mb-8", colors[i].replace('text', 'bg-opacity-10 bg'))}>
+                  <Icon className={cn("w-8 h-8", colors[i])} />
+                </div>
+                <Speakable language={language} text={`${challenge.title}: ${challenge.desc}`}>
+                  <h3 className="text-2xl font-bold mb-4">{challenge.title}</h3>
+                  <p className="text-slate-400 leading-relaxed">{challenge.desc}</p>
+                </Speakable>
+              </motion.div>
+            );
+          })}
         </div>
       )
     },
     {
       id: 'conclusion',
-      title: "Our Team & Conclusion",
+      title: t[language].visionaries,
       subtitle: "The Future is Now",
       content: (
         <div className="space-y-16 max-w-6xl mx-auto text-center">
@@ -739,14 +1527,14 @@ export default function App() {
               PROJECT LEADERSHIP
             </motion.div>
             <h2 className="text-6xl font-bold tracking-tighter">
-              Meet the <span className="text-gradient">Visionaries</span>
+              {language === 'ar' ? 'تعرف على ' : 'Meet the '} <span className="text-gradient">{language === 'ar' ? 'المبتكرين' : 'Visionaries'}</span>
             </h2>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-12 max-w-4xl mx-auto">
             {[
-              { name: "ZAITI ABDERRAHMANE", role: "AI & Frontend Lead", img: "abdou-2.jpg" },
-              { name: "HABIBI ABDELHADI", role: "Cloud & Design Architect", img: "habibi.jpg" },
+              { name: "ZAITI ABDERRAHMANE", role: language === 'ar' ? "مسؤول الذكاء الاصطناعي والواجهة الأمامية" : "AI & Frontend Lead", img: "abdou-2.jpg" },
+              { name: "HABIBI ABDELHADI", role: language === 'ar' ? "مهندس السحابة والتصميم" : "Cloud & Design Architect", img: "habibi.jpg" },
             ].map((member, i) => (
               <motion.div 
                 key={i}
@@ -761,7 +1549,7 @@ export default function App() {
                     <img src={member.img} alt={member.name} className="w-full h-full object-cover" />
                   </div>
                 </div>
-                <Speakable text={`${member.name} is the ${member.role}.`}>
+                <Speakable language={language} text={`${member.name} is the ${member.role}.`}>
                   <h3 className="text-2xl font-bold mb-2 relative z-10">{member.name}</h3>
                   <p className="text-purple-400 font-medium relative z-10">{member.role}</p>
                 </Speakable>
@@ -771,17 +1559,17 @@ export default function App() {
 
           <div className="pt-16 border-t border-white/5 max-w-2xl mx-auto space-y-8">
             <div className="space-y-4">
-              <h3 className="text-4xl font-bold tracking-tight">Thank <span className="text-gradient">You</span></h3>
+              <h3 className="text-4xl font-bold tracking-tight">{t[language].thankYou}</h3>
               <p className="text-slate-400 font-light">
-                <Speakable>We appreciate your attention. We are ready to answer any questions about the future of digital intelligence.</Speakable>
+                <Speakable language={language}>{t[language].ready}</Speakable>
               </p>
             </div>
             
             <div className="flex flex-col items-center gap-4">
               <div className="flex items-center gap-3 text-slate-500 text-[10px] font-bold tracking-widest uppercase">
-                <span>Made with</span>
+                <span>{language === 'ar' ? 'صنع بـ' : 'Made with'}</span>
                 <motion.span animate={{ scale: [1, 1.2, 1] }} transition={{ duration: 1.5, repeat: Infinity }} className="text-rose-500">♥</motion.span>
-                <span>by zaiti & habibi Team</span>
+                <span>{language === 'ar' ? 'بواسطة فريق زايتي وحبيبي' : 'by zaiti & habibi Team'}</span>
               </div>
               <motion.button
                 whileHover={{ scale: 1.05 }}
@@ -790,7 +1578,7 @@ export default function App() {
                 className="px-8 py-3 bg-white/5 border border-white/10 rounded-2xl text-xs font-bold hover:bg-white/10 transition-all flex items-center gap-2"
               >
                 <TrendingUp className="w-3 h-3 text-purple-400" />
-                Restart Journey
+                {t[language].restart}
               </motion.button>
             </div>
           </div>
@@ -818,10 +1606,42 @@ export default function App() {
 
   if (!hasStarted) {
     return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4 overflow-hidden relative">
+      <div className="min-h-screen flex items-center justify-center p-4 overflow-hidden relative">
+        {/* Fullscreen & Language Toggle */}
+        <div className="absolute top-8 right-8 z-50 flex items-center gap-3">
+          <div className="flex glass rounded-2xl border-white/10 overflow-hidden">
+            {(['en', 'fr', 'ar'] as const).map((lang) => (
+              <button
+                key={lang}
+                onClick={() => setLanguage(lang)}
+                className={cn(
+                  "px-3 py-2 text-[10px] font-bold uppercase transition-all",
+                  language === lang ? "bg-purple-500 text-white" : "text-slate-400 hover:bg-white/5"
+                )}
+              >
+                {lang}
+              </button>
+            ))}
+          </div>
+          <motion.button
+            whileHover={{ scale: 1.1 }}
+            whileTap={{ scale: 0.9 }}
+            onClick={toggleFullscreen}
+            className="p-3 glass rounded-2xl border-white/10 hover:bg-white/10 transition-all group"
+            title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
+          >
+            {isFullscreen ? (
+              <Minimize className="w-6 h-6 text-purple-400" />
+            ) : (
+              <Maximize className="w-6 h-6 text-purple-400 group-hover:text-purple-300" />
+            )}
+          </motion.button>
+        </div>
+
         {/* Background blobs */}
-        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-purple-600/20 blur-[120px] rounded-full"></div>
-        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-blue-600/20 blur-[120px] rounded-full"></div>
+        <div className="absolute inset-0 pointer-events-none z-0">
+          <ShaderBackground />
+        </div>
 
         <motion.div 
           initial={{ opacity: 0, scale: 0.8 }}
@@ -833,9 +1653,15 @@ export default function App() {
             initial={{ y: -20, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
             transition={{ delay: 0.3 }}
-            className="w-24 h-24 bg-gradient-brand rounded-[2.5rem] flex items-center justify-center mx-auto mb-10 shadow-2xl shadow-purple-500/40"
+            className="w-24 h-24 bg-gradient-brand rounded-[2.5rem] flex items-center justify-center mx-auto mb-10 shadow-2xl shadow-purple-500/40 relative group overflow-hidden"
           >
-            <Zap className="w-12 h-12 text-white" />
+            <div className="absolute inset-0 bg-white/20 rounded-[2.5rem] animate-pulse group-hover:scale-110 transition-transform" />
+            <img 
+              src="/logo.jpg" 
+              alt="Logo" 
+              className="w-16 h-16 object-contain mix-blend-screen relative z-10"
+              referrerPolicy="no-referrer"
+            />
           </motion.div>
           
           <motion.h1 
@@ -844,7 +1670,7 @@ export default function App() {
             transition={{ delay: 0.5 }}
             className="text-6xl md:text-7xl font-bold mb-6 tracking-tighter"
           >
-            Welcome to Our <span className="text-gradient">Presentation</span>
+            {t[language].welcome} <span className="text-gradient">{t[language].presentation}</span>
           </motion.h1>
           
           <motion.p 
@@ -853,7 +1679,7 @@ export default function App() {
             transition={{ delay: 0.7 }}
             className="text-xl text-slate-400 mb-12 max-w-lg mx-auto font-light leading-relaxed"
           >
-            The future of SME intelligence starts here. Experience the synergy of AI and Cloud.
+            {t[language].subtitle}
           </motion.p>
 
           <motion.button 
@@ -867,7 +1693,7 @@ export default function App() {
           >
             <div className="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform duration-300" />
             <span className="relative z-10 flex items-center gap-3">
-              Start Presentation <ChevronRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
+              {t[language].start} <ChevronRight className={cn("w-5 h-5 group-hover:translate-x-1 transition-transform", language === 'ar' ? "rotate-180" : "")} />
             </span>
           </motion.button>
         </motion.div>
@@ -876,37 +1702,80 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-50 overflow-hidden flex flex-col">
+    <div 
+      className={cn(
+        "min-h-screen text-slate-50 overflow-hidden flex flex-col",
+        language === 'ar' ? "font-arabic" : ""
+      )}
+      dir={language === 'ar' ? 'rtl' : 'ltr'}
+    >
       {/* Navbar */}
       <header className="h-20 glass border-b border-white/10 flex items-center justify-between px-12 relative z-50">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 bg-gradient-brand rounded-lg flex items-center justify-center">
-            <Zap className="w-5 h-5 text-white" />
+        <div className="flex items-center gap-6">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 bg-gradient-brand rounded-lg flex items-center justify-center overflow-hidden">
+              <img 
+                src="/logo.jpg" 
+                alt="Logo" 
+                className="w-full h-full object-contain mix-blend-screen"
+                referrerPolicy="no-referrer"
+              />
+            </div>
+            <span className="font-bold text-xl tracking-tight">zaiti <span className="text-purple-400">& habibi</span></span>
           </div>
-          <span className="font-bold text-xl tracking-tight">zaiti <span className="text-purple-400">& habibi</span></span>
         </div>
         
         <div className="flex items-center gap-6">
-          <div className="flex gap-1.5">
-            {slides.map((_, i) => (
-              <div 
-                key={i} 
-                className={cn(
-                  "h-1 rounded-full transition-all duration-300",
-                  currentSlide === i ? "w-6 bg-purple-500" : "w-1.5 bg-white/10"
-                )}
-              />
-            ))}
+          <div className="flex items-center gap-3">
+            <div className="flex glass rounded-xl border-white/10 overflow-hidden">
+              {(['en', 'fr', 'ar'] as const).map((lang) => (
+                <button
+                  key={lang}
+                  onClick={() => setLanguage(lang)}
+                  className={cn(
+                    "px-2 py-1.5 text-[10px] font-bold uppercase transition-all",
+                    language === lang ? "bg-purple-500 text-white" : "text-slate-400 hover:bg-white/5"
+                  )}
+                >
+                  {lang}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={toggleFullscreen}
+              className="p-2 glass rounded-xl border-white/10 hover:bg-white/10 transition-all group"
+              title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
+            >
+              {isFullscreen ? (
+                <Minimize className="w-4 h-4 text-purple-400" />
+              ) : (
+                <Maximize className="w-4 h-4 text-purple-400 group-hover:text-purple-300" />
+              )}
+            </button>
           </div>
-          <div className="text-right">
-            <p className="text-[10px] text-slate-400 uppercase tracking-widest font-bold">{slides[currentSlide].subtitle}</p>
-            <p className="text-xs font-bold">{slides[currentSlide].title}</p>
+
+          <div className="flex items-center gap-6">
+            <div className="flex gap-1.5">
+              {slides.map((_, i) => (
+                <div 
+                  key={i} 
+                  className={cn(
+                    "h-1 rounded-full transition-all duration-300",
+                    currentSlide === i ? "w-6 bg-purple-500" : "w-1.5 bg-white/10"
+                  )}
+                />
+              ))}
+            </div>
+            <div className="text-right">
+              <p className="text-[10px] text-slate-400 uppercase tracking-widest font-bold">{slides[currentSlide].subtitle}</p>
+              <p className="text-xs font-bold">{slides[currentSlide].title}</p>
+            </div>
           </div>
         </div>
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 relative flex items-center justify-center p-12">
+      <main className="flex-1 relative z-10 flex items-center justify-center p-12">
         <AnimatePresence mode="wait">
           <motion.div
             key={currentSlide}
@@ -949,10 +1818,10 @@ export default function App() {
       </main>
 
       {/* Background elements */}
-      <div className="fixed inset-0 pointer-events-none -z-10">
-        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-purple-600/10 blur-[120px] rounded-full"></div>
-        <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-blue-600/10 blur-[120px] rounded-full"></div>
+      <div className="fixed inset-0 pointer-events-none z-0">
+        <ShaderBackground />
       </div>
+      <VoiceChat />
     </div>
   );
 }
