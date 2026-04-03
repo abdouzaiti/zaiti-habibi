@@ -97,11 +97,11 @@ const Sidebar = ({ activeTab, setActiveTab, collapsed, setCollapsed }: any) => {
       className="fixed left-0 top-0 h-full glass border-r border-white/10 z-50 flex flex-col"
     >
       <div className="p-6 flex items-center gap-3">
-        <div className="w-8 h-8 bg-gradient-brand rounded-lg flex items-center justify-center shadow-lg shadow-purple-500/20 overflow-hidden">
+        <div className="w-12 h-12 bg-gradient-brand rounded-lg flex items-center justify-center shadow-lg shadow-purple-500/20">
           <img 
-            src="/logo.jpg" 
+            src="/logo.png" 
             alt="Logo" 
-            className="w-full h-full object-contain mix-blend-screen"
+            className="w-full h-full object-contain scale-125"
             referrerPolicy="no-referrer"
           />
         </div>
@@ -204,8 +204,8 @@ const Navbar = ({ collapsed, setCollapsed, isFullscreen, toggleFullscreen }: any
             <p className="text-xs text-slate-400">Admin Account</p>
           </div>
           <div className="w-10 h-10 rounded-full bg-gradient-brand p-[2px]">
-            <div className="w-full h-full rounded-full bg-slate-900 flex items-center justify-center overflow-hidden">
-              <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Felix" alt="Avatar" />
+            <div className="w-full h-full rounded-full bg-slate-900 flex items-center justify-center">
+              <img src="/logo.png" alt="Logo" className="w-full h-full object-contain scale-125" referrerPolicy="no-referrer" />
             </div>
           </div>
         </div>
@@ -1136,8 +1136,14 @@ export default function App() {
       subtitle: t[language].synergy,
       content: (
         <div className="space-y-8 text-center max-w-4xl mx-auto">
-          <div className="w-24 h-24 bg-gradient-brand rounded-[2rem] flex items-center justify-center mx-auto mb-8 shadow-2xl shadow-purple-500/40">
-            <Zap className="w-12 h-12 text-white" />
+          <div className="w-32 h-32 bg-gradient-brand rounded-[2.5rem] flex items-center justify-center mx-auto mb-8 shadow-2xl shadow-purple-500/40 relative group">
+            <div className="absolute inset-0 bg-white/20 rounded-[2.5rem] animate-pulse group-hover:scale-110 transition-transform" />
+            <img 
+              src="/logo.png" 
+              alt="Logo" 
+              className="w-32 h-32 object-contain relative z-10 scale-125" 
+              referrerPolicy="no-referrer" 
+            />
           </div>
           <h2 className="text-6xl font-bold tracking-tight leading-tight">
             <Speakable language={language} className="text-gradient">{t[language].empowering}</Speakable>
@@ -1303,12 +1309,12 @@ export default function App() {
                     <motion.div
                       animate={{ scale: [1, 1.2, 1], boxShadow: ["0 0 0px rgba(250,204,21,0)", "0 0 30px rgba(250,204,21,0.4)", "0 0 0px rgba(250,204,21,0)"] }}
                       transition={{ duration: 2, repeat: Infinity }}
-                      className="w-16 h-16 bg-yellow-400/20 rounded-full flex items-center justify-center border border-yellow-500/50 relative z-20 overflow-hidden"
+                      className="w-20 h-20 bg-yellow-400/20 rounded-full flex items-center justify-center border border-yellow-500/50 relative z-20"
                     >
                       <img 
-                        src="/logo.jpg" 
+                        src="/logo.png" 
                         alt="Logo" 
-                        className="w-10 h-10 object-contain mix-blend-screen"
+                        className="w-20 h-20 object-contain scale-125"
                         referrerPolicy="no-referrer"
                       />
                     </motion.div>
@@ -1653,13 +1659,13 @@ export default function App() {
             initial={{ y: -20, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
             transition={{ delay: 0.3 }}
-            className="w-24 h-24 bg-gradient-brand rounded-[2.5rem] flex items-center justify-center mx-auto mb-10 shadow-2xl shadow-purple-500/40 relative group overflow-hidden"
+            className="w-32 h-32 bg-gradient-brand rounded-[2.5rem] flex items-center justify-center mx-auto mb-10 shadow-2xl shadow-purple-500/40 relative group"
           >
             <div className="absolute inset-0 bg-white/20 rounded-[2.5rem] animate-pulse group-hover:scale-110 transition-transform" />
             <img 
-              src="/logo.jpg" 
+              src="/logo.png" 
               alt="Logo" 
-              className="w-16 h-16 object-contain mix-blend-screen relative z-10"
+              className="w-32 h-32 object-contain relative z-10 scale-125"
               referrerPolicy="no-referrer"
             />
           </motion.div>
@@ -1713,11 +1719,11 @@ export default function App() {
       <header className="h-20 glass border-b border-white/10 flex items-center justify-between px-12 relative z-50">
         <div className="flex items-center gap-6">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 bg-gradient-brand rounded-lg flex items-center justify-center overflow-hidden">
+            <div className="w-12 h-12 bg-gradient-brand rounded-lg flex items-center justify-center">
               <img 
-                src="/logo.jpg" 
+                src="/logo.png" 
                 alt="Logo" 
-                className="w-full h-full object-contain mix-blend-screen"
+                className="w-full h-full object-contain scale-125"
                 referrerPolicy="no-referrer"
               />
             </div>
