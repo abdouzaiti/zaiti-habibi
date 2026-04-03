@@ -544,7 +544,7 @@ const VideoExplanation = ({ videoId, title, description, isShort = true, inlineP
                 exit={{ scale: 0.9, y: 20 }}
                 className={cn(
                   "relative w-full rounded-3xl overflow-hidden border border-white/10 shadow-2xl bg-black",
-                  isShort ? "max-w-md aspect-[9/16]" : "max-w-5xl aspect-video"
+                  isShort ? "max-w-md aspect-[9/16]" : "w-[90vw] max-w-[1400px] aspect-video"
                 )}
                 onClick={(e) => e.stopPropagation()}
               >
