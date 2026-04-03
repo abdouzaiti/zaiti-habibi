@@ -544,7 +544,7 @@ const VideoExplanation = ({ videoId, title, description, isShort = true, inlineP
                 exit={{ scale: 0.9, y: 20 }}
                 className={cn(
                   "relative w-full rounded-3xl overflow-hidden border border-white/10 shadow-2xl bg-black",
-                  isShort ? "max-w-md aspect-[9/16]" : "w-[90vw] max-w-[1400px] aspect-video"
+                  isShort ? "max-w-md aspect-[9/16]" : "w-[95vw] h-[90vh] max-w-[2400px]"
                 )}
                 onClick={(e) => e.stopPropagation()}
               >
@@ -1375,7 +1375,7 @@ export default function App() {
                 })}
               </div>
 
-              <div className="glass-card p-6 rounded-3xl border-purple-500/20">
+              <div className="glass-card p-2 rounded-3xl border-purple-500/20 transform scale-[1.05] hover:scale-[1.1] transition-transform duration-500">
                 <VideoExplanation 
                   videoId="y1jBWGcjTcM"
                   title={language === 'ar' ? "قوة الذكاء الاصطناعي والسحابة" : language === 'fr' ? "La Puissance de l'IA et du Cloud" : "The Power of AI & Cloud"}
