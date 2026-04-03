@@ -486,32 +486,31 @@ const VideoExplanation = ({ videoId, title, description, isShort = true }: { vid
   const [isPlaying, setIsPlaying] = useState(false);
 
   return (
-    <div className="relative group overflow-hidden rounded-[2.5rem] border border-white/10 aspect-video glass-card w-full">
-      {!isPlaying ? (
-        <>
-          <div 
-            className="absolute inset-0 bg-slate-900/40 group-hover:bg-slate-900/20 transition-colors duration-500 cursor-pointer z-10" 
-            onClick={() => setIsPlaying(true)} 
-          />
-          <img 
-            src={`https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`} 
-            className="w-full h-full object-cover opacity-60 group-hover:opacity-100 transition-opacity duration-500"
-            alt={title}
-            referrerPolicy="no-referrer"
-          />
-          <div className="absolute inset-0 bg-gradient-to-t from-slate-900/80 via-transparent to-transparent flex flex-col justify-end p-6 pointer-events-none z-20">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center border border-white/20 group-hover:bg-purple-500/20 transition-colors">
-                <Play className="w-4 h-4 text-white fill-white" />
-              </div>
-              <div>
-                <p className="text-xs font-bold uppercase tracking-widest text-slate-400">{isShort ? 'YouTube Short' : 'YouTube Video'}</p>
-                <p className="text-sm font-bold text-white">{title}</p>
-              </div>
+    <div className="relative group overflow-hidden rounded-[2.5rem] border border-white/10 aspect-video glass-card w-full bg-slate-900">
+      <div 
+        className={cn("absolute inset-0 transition-opacity duration-500 cursor-pointer z-10", isPlaying ? "opacity-0 pointer-events-none" : "opacity-100")}
+        onClick={() => setIsPlaying(true)} 
+      >
+        <div className="absolute inset-0 bg-slate-900/40 group-hover:bg-slate-900/20 transition-colors duration-500" />
+        <img 
+          src={`https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`} 
+          className="w-full h-full object-cover opacity-60 group-hover:opacity-100 transition-opacity duration-500"
+          alt={title}
+          referrerPolicy="no-referrer"
+        />
+        <div className="absolute inset-0 bg-gradient-to-t from-slate-900/80 via-transparent to-transparent flex flex-col justify-end p-6 pointer-events-none">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center border border-white/20 group-hover:bg-purple-500/20 transition-colors">
+              <Play className="w-4 h-4 text-white fill-white" />
+            </div>
+            <div>
+              <p className="text-xs font-bold uppercase tracking-widest text-slate-400">{isShort ? 'YouTube Short' : 'YouTube Video'}</p>
+              <p className="text-sm font-bold text-white">{title}</p>
             </div>
           </div>
-        </>
-      ) : (
+        </div>
+      </div>
+      {isPlaying && (
         <iframe 
           src={`https://www.youtube.com/embed/${videoId}?autoplay=1&modestbranding=1&rel=0`}
           className="w-full h-full absolute inset-0 z-30"
